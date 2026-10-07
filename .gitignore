@@ -1,0 +1,28 @@
+# Customer data — never commit
+inputs/
+exports/
+
+# Generated output
+build/
+out/
+*.log
+catalog*.json
+!tests/fixtures/*.json
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+
+# Local MCP server config
+.mcp.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+.history/

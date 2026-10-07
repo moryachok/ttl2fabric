@@ -1,0 +1,144 @@
+@prefix : <http://example.com/ontology/test#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+<http://example.com/ontology/test> a owl:Ontology ;
+    rdfs:label "Test Ontology"@en .
+
+:physicalClassName a owl:AnnotationProperty .
+:EnumerationValue a owl:Class ; rdfs:label "Enumeration Value"@en .
+
+:Customer a owl:Class ;
+    rdfs:label "Customer"@en ;
+    rdfs:comment """A party that buys services.""" ;
+    :classId """119""" ;
+    :physicalClassName """customer__t""" ;
+    :subjectArea """Customer""" ;
+    :synonyms """Customer; Client; Account Holder""" ;
+    :classBusinessGrain """One row per customer.""" ;
+    :primaryKey """Customer Key""" .
+
+:Address a owl:Class ;
+    rdfs:label "Address"@en ;
+    rdfs:comment """A postal location.""" ;
+    :physicalClassName """address__t""" ;
+    :subjectArea """Customer""" ;
+    :primaryKey """Address Key""" .
+
+:FinancialAccount a owl:Class ;
+    rdfs:label "Financial Account"@en ;
+    :physicalClassName """financialaccount__t""" ;
+    :subjectArea """Finance""" ;
+    :primaryKey """Financial Account Key""" .
+
+:DailyAgg a owl:Class ;
+    rdfs:label "Daily Agg"@en ;
+    :physicalClassName """dailyagg__t""" ;
+    :subjectArea """Customer""" ;
+    :primaryKey """Aggregate Date, Customer Key""" .
+
+:CreditClass a owl:Class ;
+    rdfs:label "Credit Class"@en .
+
+# ---------------------------------------------------------------- Customer
+:Customer_CustomerKey a owl:DatatypeProperty ;
+    rdfs:label "Customer Key"@en ; rdfs:domain :Customer ; rdfs:range xsd:string ;
+    rdfs:comment """Unique id of the customer.""" ;
+    :physicalDataPropertyName """customerKey""" ; :sqlDataType """VARCHAR(256)""" .
+
+:Customer_OpenDate a owl:DatatypeProperty ;
+    rdfs:label "Open Date"@en ; rdfs:domain :Customer ; rdfs:range xsd:date ;
+    :physicalDataPropertyName """openDate""" .
+
+:Customer_MVNOFlag a owl:DatatypeProperty ;
+    rdfs:label "MVNO Flag"@en ; rdfs:domain :Customer ; rdfs:range xsd:string ;
+    :physicalDataPropertyName """mVNOFlag""" .
+
+:Customer_CaseProp a owl:DatatypeProperty ;
+    rdfs:label "Case Prop"@en ; rdfs:domain :Customer ; rdfs:range xsd:string ;
+    :physicalDataPropertyName """caseProp""" .
+
+:Customer_MissingProp a owl:DatatypeProperty ;
+    rdfs:label "Missing Prop"@en ; rdfs:domain :Customer ; rdfs:range xsd:string ;
+    :physicalDataPropertyName """missingProp""" .
+
+:Customer_SourceSystemId a owl:DatatypeProperty ;
+    rdfs:label "Source System Id"@en ; rdfs:domain :Customer ; rdfs:range xsd:string ;
+    :physicalDataPropertyName """sourceSystemId""" ;
+    :hasEnumerationValue [ a :EnumerationValue ; :enumerationValue """CRM""" ] .
+
+# ----------------------------------------------------------------- Address
+:Address_AddressKey a owl:DatatypeProperty ;
+    rdfs:label "Address Key"@en ; rdfs:domain :Address ; rdfs:range xsd:string ;
+    :physicalDataPropertyName """addressKey""" .
+
+:Address_SourceSystemId a owl:DatatypeProperty ;
+    rdfs:label "Source System Id"@en ; rdfs:domain :Address ; rdfs:range xsd:string ;
+    :physicalDataPropertyName """sourceSystemId""" .
+
+:Address_Latitude a owl:DatatypeProperty ;
+    rdfs:label "Latitude"@en ; rdfs:domain :Address ; rdfs:range xsd:decimal ;
+    :physicalDataPropertyName """latitude""" .
+
+# ------------------------------------------------------- Financial Account
+:FinancialAccount_FinancialAccountKey a owl:DatatypeProperty ;
+    rdfs:label "Financial Account Key"@en ; rdfs:domain :FinancialAccount ; rdfs:range xsd:string ;
+    :physicalDataPropertyName """financialAccountKey""" .
+
+:FinancialAccount_Balance a owl:DatatypeProperty ;
+    rdfs:label "Balance"@en ; rdfs:domain :FinancialAccount ; rdfs:range xsd:decimal ;
+    :physicalDataPropertyName """balance""" .
+
+:DailyAgg_AggregateDate a owl:DatatypeProperty ;
+    rdfs:label "Aggregate Date"@en ; rdfs:domain :DailyAgg ; rdfs:range xsd:date ;
+    :physicalDataPropertyName """aggregateDate""" .
+
+# -------------------------------------------------------- Object properties
+:Customer_HasMainAddress_Address a owl:ObjectProperty ;
+    rdfs:label "Customer has Main Address"@en ;
+    rdfs:domain :Customer ; rdfs:range :Address ;
+    rdfs:comment """Identifies the main address of the customer.""" ;
+    :cardinality """Many-to-One (N:1) [Source -> Target]""" ;
+    :joinCondition """customer__t.mainAddressKey = address__t.addressKey""" .
+
+:Customer_HasBillingAddress_Address a owl:ObjectProperty ;
+    rdfs:label "Customer has Billing Address"@en ;
+    rdfs:domain :Customer ; rdfs:range :Address ;
+    :joinCondition """address__t.addressKey = customer__t.billingAddressKey""" .
+
+:Customer_HasLegacyAddress_Address a owl:ObjectProperty ;
+    rdfs:label "Customer has Legacy Address"@en ;
+    rdfs:domain :Customer ; rdfs:range :Address ;
+    :joinCondition """customer__t.legacyAddressKey = address__t.addressKey""" .
+
+:Customer_HasCreditClass_CreditClass a owl:ObjectProperty ;
+    rdfs:label "Customer has Credit Class"@en ;
+    rdfs:domain :Customer ; rdfs:range :CreditClass ;
+    :joinCondition """customer__t.creditClassKey = creditclass__t.creditClassKey""" .
+
+:Customer_HasParent_Customer a owl:ObjectProperty ;
+    rdfs:label "Customer has Parent"@en ;
+    rdfs:domain :Customer ; rdfs:range :Customer ;
+    :joinCondition """customer__t.parentCustomerKey = customer__t.customerKey""" .
+
+:Customer_HasAccount_FinancialAccount a owl:ObjectProperty ;
+    rdfs:label "Customer has Account"@en ;
+    rdfs:domain :Customer ; rdfs:range :FinancialAccount ;
+    :joinCondition """customer__t.financialAccountKey = financialaccount__t.financialAccountKey""" .
+
+:Address_HasGarbage_Customer a owl:ObjectProperty ;
+    rdfs:label "Address garbage"@en ;
+    rdfs:domain :Address ; rdfs:range :Customer ;
+    :joinCondition """this is not a join""" .
+
+:Address_HasWrongTables_Customer a owl:ObjectProperty ;
+    rdfs:label "Address wrong tables"@en ;
+    rdfs:domain :Address ; rdfs:range :Customer ;
+    :joinCondition """foo__t.customerKey = bar__t.customerKey""" .
+
+:BT_Term a owl:NamedIndividual, :BusinessTerm ;
+    rdfs:label "Term"@en .
+:BusinessTerm a owl:Class .

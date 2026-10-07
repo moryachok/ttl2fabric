@@ -1,0 +1,4 @@
+rdflib>=7.0
+requests>=2.31
+azure-identity>=1.15
+pyarrow>=14.0
