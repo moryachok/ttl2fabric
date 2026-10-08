@@ -5,6 +5,9 @@ item definition, **bound to physical lakehouse tables**, so you can create a ful
 at scale. Optionally it validates every entity, property, and relationship against the real lakehouse via
 the Fabric / OneLake APIs, skips what doesn't physically exist, and logs every skip with its reason.
 
+> Only need the Fabric-style TTL, with no TMDL definition and no deploy? Use `ttl2fabric convert-ttl`
+> (see [3.13](#313-only-the-fabric-ttl-convert-ttl)). It takes the same validation and modelling flags, including `--strict`.
+
 Outputs of one `convert` run:
 
 | File | What it is |
@@ -85,6 +88,7 @@ python -m ttl2fabric convert inputs/Telco_Ontology_v15.ttl --name TelcoMain --fo
 ```
 
 Writes `build/TelcoMain/TelcoMain.ttl` plus reports. Entities without a table/key are still skipped (with reasons).
+For a TTL-only flavor with its own output folder see [3.13](#313-only-the-fabric-ttl-convert-ttl).
 
 ### 3.2 Offline TMDL with known lakehouse IDs (bindings NOT verified)
 
@@ -284,6 +288,59 @@ grep ',COLUMN_' build/TelcoMain/skipped.csv
 python -c "import json;print(json.dumps(json.load(open('build/TelcoMain/report.json'))['skipped'],indent=2))"
 ```
 
+### 3.13 Only the Fabric TTL (`convert-ttl`)
+
+`convert-ttl` translates the input TTL into the TTL vocabulary that Fabric v2 exports and stops there: no TMDL
+definition, no `envelope.json`, nothing to deploy. The TTL goes into `--output-dir` next to the usual reports
+(`skipped.csv`, `findings.csv`, `report.json`, `ttl2fabric.log`).
+
+```bash
+# translate everything the model can express, nothing is checked against a lakehouse
+python -m ttl2fabric convert-ttl inputs/Telco_Ontology_v15.ttl --name TelcoMain --output-dir out
+
+# strict: keep only what exists in the lakehouse under exactly the same name (live Fabric access)
+python -m ttl2fabric convert-ttl inputs/Telco_Ontology_v15.ttl --name TelcoMain --output-dir out \
+  --workspace customers --lakehouse ontology_lakehouse --schema bronze --strict
+
+# the same, offline, from a catalog snapshot (see 3.8)
+python -m ttl2fabric convert-ttl inputs/Telco_Ontology_v15.ttl --name TelcoMain --output-dir out \
+  --catalog-file catalog.json --schema bronze --strict
+```
+
+Writes `out/TelcoMain.ttl`. The flags are the ones of `convert` (3.3 – 3.10) and give the same result as
+`convert --format ttl`: `--strict` and the other skip flags decide which entities, properties and relationships
+reach the TTL, so it describes the same model a `convert` run would deploy. As in `convert`, the validation flags
+need a physical source (`--workspace/--lakehouse` or `--catalog-file`); without one the TTL is generated from the
+input alone and nothing is verified.
+
+Differences to `convert --format ttl`:
+
+- `--output-dir` defaults to `build/<name>-ttl`, so it never overwrites the `report.json` of a `convert` run.
+- It has no `--format`, and no lakehouse identity flags (`--workspace-id/-name`, `--lakehouse-id/-name`,
+  `--sql-endpoint`) because they only matter for TMDL bindings.
+- It never touches an existing `definition/` in the output folder (`convert` removes it). If one is there, it warns:
+  that definition no longer matches `report.json`, so `deploy` refuses it.
+- If no entity is left to translate it exits with code 1 and writes the reports but no TTL, instead of silently
+  writing nothing.
+
+**A TTL cannot carry bindings.** The Fabric TTL format has classes, properties and relationships only. When you import
+it into Fabric you get entity types with their properties, descriptions, synonyms and metadata, but **no key and no
+table bindings**: the entity's *Instances* tab shows "Missing static binding", and no `tables/`, `expressions.tmdl` or
+`valueColumn` exists in the item. That is a limit of the format, so no `convert-ttl` flag or config file can add
+bindings. For entities bound to the lakehouse tables, build the TMDL definition with `convert` and create or update
+the item with `deploy`:
+
+```bash
+# 1. bind to the lakehouse (the --workspace/--lakehouse/--schema flags supply the lakehouse identity and check the columns)
+python -m ttl2fabric convert inputs/Telco_Ontology_v15.ttl --name TelcoMain \
+  --workspace customers --lakehouse ontology_lakehouse --schema bronze --strict
+
+# 2. create a new bound item ...
+python -m ttl2fabric deploy build/TelcoMain --workspace customers --name TelcoMainBound
+# ... or bind an item that already exists, e.g. one created by importing the TTL (keeps its item and entity IDs)
+python -m ttl2fabric deploy build/TelcoMain --workspace customers --name TelcoMainV2ImportTTL --update-existing
+```
+
 ## 4. Command reference
 
 ### `convert`
@@ -291,7 +348,7 @@ python -c "import json;print(json.dumps(json.load(open('build/TelcoMain/report.j
 | Flag | Meaning |
 |---|---|
 | `input` | Ontology file (`.ttl`; `.rdf/.owl/.nt/.jsonld` also parse) |
-| `-o, --output` | Output folder (default `build/<name>`). Each run regenerates `definition/` and removes it when no TMDL is written, e.g. with `--format ttl`. `deploy` also checks a fingerprint stored in `report.json`. |
+| `-o, --output-dir` (alias `--output`) | Output folder (default `build/<name>`). Each run regenerates `definition/` and removes it when no TMDL is written, e.g. with `--format ttl`. `deploy` also checks a fingerprint stored in `report.json`. |
 | `--name` | Ontology display name (default: sanitized ontology label) |
 | `--format both\|tmdl\|ttl` | What to write (default `both`) |
 | `--ontology-id` | GUID used in the TTL base IRI `https://fabric.microsoft.com/ontology/<id>` (default: deterministic from `--name`) |
@@ -317,6 +374,17 @@ python -c "import json;print(json.dumps(json.load(open('build/TelcoMain/report.j
 | `--annotation-exclude` | Metadata keys to leave out of entities and properties (comma list, case-insensitive) |
 | `--log-level`, `--log-file`, `--auth` | Logging / authentication |
 
+### `convert-ttl`
+
+Same flags as `convert`, minus the ones that only matter for the TMDL definition. Writes `<name>.ttl` and the reports into
+`-o, --output-dir` (alias `--output`, default `build/<name>-ttl`).
+
+- Takes: `input`, `-o/--output-dir`, `--name`, `--ontology-id`, `--vocab-ns`, `--workspace`, `--lakehouse`,
+  `--catalog-file`, `--schema`, `--skip-missing-tables`, `--skip-missing-columns`, `--case-sensitive`,
+  `--fuzzy-columns`, `--strict`, all the modelling flags (`--entities` … `--annotation-exclude`) and
+  `--log-level`, `--log-file`, `--auth`. They behave as in `convert`.
+- Does not take: `--format`, `--workspace-id`, `--workspace-name`, `--lakehouse-id`, `--lakehouse-name`, `--sql-endpoint`.
+
 ### `catalog`
 
 `--workspace`, `--lakehouse` (required), `--schema`, `--tables`, `-o catalog.json`. Lists tables through
@@ -334,8 +402,8 @@ checkpoints (via `pyarrow`).
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Error (authentication, API, invalid input, …) |
-| 2 | `convert` finished but some bindings are **UNRESOLVED** (see `findings.csv`) |
+| 1 | Error (authentication, API, invalid input, `convert-ttl` with no entity left to translate, …) |
+| 2 | `convert` / `convert-ttl` finished but some bindings are **UNRESOLVED** (see `findings.csv`) |
 
 ## 5. Skip reason codes (`skipped.csv → reason`)
 

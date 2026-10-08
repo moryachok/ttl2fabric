@@ -1,4 +1,4 @@
-"""Command line interface: convert | catalog | deploy."""
+"""Command line interface: convert | convert-ttl | catalog | deploy."""
 
 from __future__ import annotations
 
@@ -36,8 +36,25 @@ EPILOG = """examples:
   python -m ttl2fabric convert inputs/model.ttl --name TelcoMain --workspace customers \\
       --lakehouse ontology_lakehouse --schema bronze --skip-missing-tables --skip-missing-columns
 
+  # only the Fabric-style TTL (no TMDL definition, no deploy), same validation flags
+  python -m ttl2fabric convert-ttl inputs/model.ttl --name TelcoMain --output-dir out \\
+      --catalog-file catalog.json --schema bronze --strict
+
   # create the ontology item from the generated folder
   python -m ttl2fabric deploy build/TelcoMain --workspace customers
+"""
+
+TTL_EPILOG = """examples:
+  # translate only, nothing is checked against a lakehouse
+  python -m ttl2fabric convert-ttl inputs/model.ttl --name TelcoMain --output-dir out
+
+  # keep only what exists in the lakehouse, exact names only (live Fabric access)
+  python -m ttl2fabric convert-ttl inputs/model.ttl --name TelcoMain --output-dir out \\
+      --workspace customers --lakehouse ontology_lakehouse --schema bronze --strict
+
+  # the same offline, from a catalog snapshot written by 'ttl2fabric catalog'
+  python -m ttl2fabric convert-ttl inputs/model.ttl --name TelcoMain --output-dir out \\
+      --catalog-file catalog.json --schema bronze --strict
 """
 
 
@@ -48,49 +65,33 @@ def _csv_list(values: Optional[list[str]]) -> list[str]:
     return out
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="ttl2fabric",
-        description="Convert an OWL/Turtle ontology into a Fabric IQ Ontology (v2) item definition.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=EPILOG,
+def _add_output_arg(p: argparse.ArgumentParser, default: str) -> None:
+    p.add_argument(
+        "-o",
+        "--output-dir",
+        "--output",
+        dest="output",
+        metavar="DIR",
+        help=f"Output folder (default: {default})",
     )
-    p.add_argument("--version", action="version", version=f"ttl2fabric {__version__}")
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
-    common.add_argument("--log-file", help="Log file (default: <output>/ttl2fabric.log for convert)")
-    common.add_argument(
-        "--auth", default="cli", choices=["cli", "default", "interactive"], help="Azure credential (default: az CLI)"
-    )
-    sub = p.add_subparsers(dest="command", required=True)
 
-    # ---------------------------------------------------------------- convert
-    c = sub.add_parser(
-        "convert",
-        parents=[common],
-        help="Convert a TTL file to a Fabric Ontology definition (TMDL) and Fabric-style TTL",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=EPILOG,
-    )
-    c.add_argument("input", help="Input ontology (.ttl; .rdf/.owl/.nt/.jsonld also accepted)")
-    c.add_argument("-o", "--output", help="Output folder (default: build/<name>)")
-    c.add_argument("--name", help="Ontology item display name (default: derived from the ontology label)")
-    c.add_argument("--format", choices=["both", "tmdl", "ttl"], default="both", help="Outputs to write (default: both)")
-    c.add_argument("--ontology-id", help="GUID used in the TTL base IRI (default: deterministic from --name)")
-    c.add_argument("--vocab-ns", help="Namespace of the annotation vocabulary (default: auto-detect)")
 
-    g = c.add_argument_group("physical source (lakehouse)")
+def _add_physical_source_args(p: argparse.ArgumentParser, lakehouse_identity: bool) -> None:
+    g = p.add_argument_group("physical source (lakehouse)")
     g.add_argument("--workspace", help="Workspace name or id — enables live validation via Fabric APIs")
     g.add_argument("--lakehouse", help="Lakehouse name or id (with --workspace)")
     g.add_argument("--catalog-file", help="Offline catalog: JSON from 'ttl2fabric catalog' or INFORMATION_SCHEMA CSV")
     g.add_argument("--schema", action="append", help="Schema(s) to search, in priority order (repeat or comma-separate)")
-    g.add_argument("--workspace-id", help="Override/offline: workspace GUID for bindings")
-    g.add_argument("--workspace-name", help="Override/offline: workspace name (annotation only)")
-    g.add_argument("--lakehouse-id", help="Override/offline: lakehouse GUID for bindings")
-    g.add_argument("--lakehouse-name", help="Override/offline: lakehouse name (used in the DirectLake expression)")
-    g.add_argument("--sql-endpoint", help="Override/offline: lakehouse SQL endpoint host (annotation only)")
+    if lakehouse_identity:  # only used to write TMDL bindings, so the TTL-only flavor does not take them
+        g.add_argument("--workspace-id", help="Override/offline: workspace GUID for bindings")
+        g.add_argument("--workspace-name", help="Override/offline: workspace name (annotation only)")
+        g.add_argument("--lakehouse-id", help="Override/offline: lakehouse GUID for bindings")
+        g.add_argument("--lakehouse-name", help="Override/offline: lakehouse name (used in the DirectLake expression)")
+        g.add_argument("--sql-endpoint", help="Override/offline: lakehouse SQL endpoint host (annotation only)")
 
-    v = c.add_argument_group("validation & skipping (need --workspace/--lakehouse or --catalog-file)")
+
+def _add_validation_args(p: argparse.ArgumentParser) -> None:
+    v = p.add_argument_group("validation & skipping (need --workspace/--lakehouse or --catalog-file)")
     v.add_argument(
         "--skip-missing-tables",
         action="store_true",
@@ -113,7 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true", help="Shortcut for --skip-missing-tables --skip-missing-columns --case-sensitive"
     )
 
-    m = c.add_argument_group("modelling")
+
+def _add_modelling_args(p: argparse.ArgumentParser) -> None:
+    m = p.add_argument_group("modelling")
     m.add_argument("--entities", action="append", help="Only these classes (local name, label or table; comma list)")
     m.add_argument("--exclude-entities", action="append", help="Exclude these classes (comma list)")
     m.add_argument("--subject-areas", action="append", help="Only classes in these subjectArea values (comma list)")
@@ -161,6 +164,62 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Metadata keys to leave out of entities and properties, e.g. dataPropertyId,classId (comma list)",
     )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="ttl2fabric",
+        description="Convert an OWL/Turtle ontology into a Fabric IQ Ontology (v2) item definition.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    p.add_argument("--version", action="version", version=f"ttl2fabric {__version__}")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    common.add_argument("--log-file", help="Log file (default: <output>/ttl2fabric.log for convert and convert-ttl)")
+    common.add_argument(
+        "--auth", default="cli", choices=["cli", "default", "interactive"], help="Azure credential (default: az CLI)"
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    # ---------------------------------------------------------------- convert
+    c = sub.add_parser(
+        "convert",
+        parents=[common],
+        help="Convert a TTL file to a Fabric Ontology definition (TMDL) and Fabric-style TTL",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    c.add_argument("input", help="Input ontology (.ttl; .rdf/.owl/.nt/.jsonld also accepted)")
+    _add_output_arg(c, "build/<name>")
+    c.add_argument("--name", help="Ontology item display name (default: derived from the ontology label)")
+    c.add_argument("--format", choices=["both", "tmdl", "ttl"], default="both", help="Outputs to write (default: both)")
+    c.add_argument("--ontology-id", help="GUID used in the TTL base IRI (default: deterministic from --name)")
+    c.add_argument("--vocab-ns", help="Namespace of the annotation vocabulary (default: auto-detect)")
+    _add_physical_source_args(c, lakehouse_identity=True)
+    _add_validation_args(c)
+    _add_modelling_args(c)
+
+    # ------------------------------------------------------------ convert-ttl
+    t = sub.add_parser(
+        "convert-ttl",
+        parents=[common],
+        help="Translate a TTL file into Fabric-style TTL only (no TMDL definition, no deploy)",
+        description="Translate an OWL/Turtle ontology into the TTL vocabulary Fabric IQ Ontology (v2) exports, with "
+        "the same validation and modelling flags as 'convert'. Writes <name>.ttl plus the skip/finding reports into "
+        "--output-dir; it never writes a TMDL definition and has no deploy step. A TTL carries no key or table "
+        "bindings: for an ontology bound to the lakehouse tables use 'convert' + 'deploy'.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=TTL_EPILOG,
+    )
+    t.add_argument("input", help="Input ontology (.ttl; .rdf/.owl/.nt/.jsonld also accepted)")
+    _add_output_arg(t, "build/<name>-ttl")
+    t.add_argument("--name", help="Ontology name, also the TTL file name (default: derived from the ontology label)")
+    t.add_argument("--ontology-id", help="GUID used in the TTL base IRI (default: deterministic from --name)")
+    t.add_argument("--vocab-ns", help="Namespace of the annotation vocabulary (default: auto-detect)")
+    _add_physical_source_args(t, lakehouse_identity=False)
+    _add_validation_args(t)
+    _add_modelling_args(t)
 
     # ---------------------------------------------------------------- catalog
     k = sub.add_parser("catalog", parents=[common], help="Dump lakehouse tables + columns to JSON (for offline use)")
@@ -232,13 +291,14 @@ def _lakehouse_overrides(args, base: Optional[LakehouseRef]) -> Optional[Lakehou
     )
 
 
-def cmd_convert(args) -> int:
+def _prepare(args, default_suffix: str = ""):
+    """Shared start of both convert flavors: parse the TTL, set up logging, open the catalog, build the options."""
     if args.strict:
         args.skip_missing_tables = args.skip_missing_columns = args.case_sensitive = True
     setup_logging(args.log_level, None)
     src = parse_ttl(args.input, vocab_ns=args.vocab_ns)
     name = args.name or sanitize_identifier(src.label or Path(args.input).stem, "Ontology")
-    out_dir = Path(args.output or Path("build") / name)
+    out_dir = Path(args.output or Path("build") / f"{name}{default_suffix}")
     add_file_log(Path(args.log_file) if args.log_file else out_dir / "ttl2fabric.log")
     log.info("ttl2fabric %s — converting %s -> %s", __version__, args.input, out_dir)
 
@@ -257,7 +317,6 @@ def cmd_convert(args) -> int:
                 "error: validation/skip flags need a physical catalog: pass --workspace/--lakehouse or --catalog-file"
             )
         log.warning("No physical catalog: bindings are generated from the TTL and NOT verified")
-    catalog.lakehouse = _lakehouse_overrides(args, catalog.lakehouse)
 
     opts = Options(
         include_entities=_csv_list(args.entities),
@@ -279,6 +338,24 @@ def cmd_convert(args) -> int:
         property_annotations=not args.no_property_annotations,
         annotation_exclude=_csv_list(args.annotation_exclude),
     )
+    return src, name, out_dir, catalog, opts
+
+
+def _write_reports(args, src, res, catalog, opts, out_dir: Path, outputs: list[str], definition_sha=None) -> dict:
+    """Shared end of both convert flavors: catalog snapshot, skip/finding reports and the console summary."""
+    if catalog.verified:
+        (out_dir / "catalog.json").write_text(json.dumps(catalog.to_json(), indent=2), encoding="utf-8")
+        outputs.append("catalog.json")
+    outputs += ["report.json", "skipped.csv", "skipped.jsonl", "findings.csv", "ttl2fabric.log"]
+    options = {k: v for k, v in dataclasses.asdict(opts).items()}
+    report = write_reports(out_dir, src, res, args.input, options, outputs, definition_sha)
+    print_summary(report, out_dir)
+    return report
+
+
+def cmd_convert(args) -> int:
+    src, name, out_dir, catalog, opts = _prepare(args)
+    catalog.lakehouse = _lakehouse_overrides(args, catalog.lakehouse)
     res = resolve(src, catalog, opts, name)
 
     outputs: list[str] = []
@@ -298,13 +375,32 @@ def cmd_convert(args) -> int:
     if args.format in ("both", "ttl") and res.ontology.entities:
         write_ttl(res.ontology, out_dir / f"{name}.ttl", args.ontology_id or default_ontology_id(name))
         outputs.append(f"{name}.ttl")
-    if catalog.verified:
-        (out_dir / "catalog.json").write_text(json.dumps(catalog.to_json(), indent=2), encoding="utf-8")
-        outputs.append("catalog.json")
-    outputs += ["report.json", "skipped.csv", "skipped.jsonl", "findings.csv", "ttl2fabric.log"]
-    options = {k: v for k, v in dataclasses.asdict(opts).items()}
-    report = write_reports(out_dir, src, res, args.input, options, outputs, definition_sha)
-    print_summary(report, out_dir)
+    _write_reports(args, src, res, catalog, opts, out_dir, outputs, definition_sha)
+    return EXIT_UNRESOLVED if res.unresolved else EXIT_OK
+
+
+def cmd_convert_ttl(args) -> int:
+    src, name, out_dir, catalog, opts = _prepare(args, default_suffix="-ttl")
+    res = resolve(src, catalog, opts, name)
+
+    if (out_dir / "definition").exists():
+        log.warning(
+            "%s holds a definition/ from an earlier 'convert' run. It is left untouched but no longer matches "
+            "report.json, so 'deploy' will refuse it",
+            out_dir,
+        )
+    outputs: list[str] = []
+    if res.ontology.entities:
+        write_ttl(res.ontology, out_dir / f"{name}.ttl", args.ontology_id or default_ontology_id(name))
+        outputs.append(f"{name}.ttl")
+    _write_reports(args, src, res, catalog, opts, out_dir, outputs)
+    if not res.ontology.entities:
+        log.error("No entities left to translate (reasons in %s): no TTL written", out_dir / "skipped.csv")
+        return EXIT_ERROR
+    log.info(
+        "NOTE: a TTL carries the schema only. Importing it into Fabric creates entity types without a key or table "
+        "bindings. For entities bound to the lakehouse tables run 'convert' and 'deploy' instead."
+    )
     return EXIT_UNRESOLVED if res.unresolved else EXIT_OK
 
 
@@ -342,7 +438,12 @@ def cmd_deploy(args) -> int:
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"convert": cmd_convert, "catalog": cmd_catalog, "deploy": cmd_deploy}
+        commands = {
+            "convert": cmd_convert,
+            "convert-ttl": cmd_convert_ttl,
+            "catalog": cmd_catalog,
+            "deploy": cmd_deploy,
+        }
         return commands[args.command](args)
     except (FabricError, CatalogError, EmitError, DeployError, FileNotFoundError, ValueError) as exc:
         logging.getLogger("ttl2fabric").error("%s", exc)
